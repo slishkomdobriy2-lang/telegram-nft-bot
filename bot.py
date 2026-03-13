@@ -1,3 +1,4 @@
+
 import asyncio
 import requests
 import re
@@ -9,7 +10,7 @@ from telethon import TelegramClient
 # --- НАСТРОЙКИ ---
 
 TOKEN = "8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw"
-USER_ID = "5524166026"
+USER_ID = 5524166026
 
 api_id = 38895122
 api_hash = "439555adbb1d50504cee21fd4ffc32d7"
@@ -35,10 +36,9 @@ client = TelegramClient("session", api_id, api_hash)
 
 session = requests.Session()
 
-# --- КЕШ СДЕЛОК (АНТИ ДУБЛИ) ---
+# --- КЕШ СДЕЛОК ---
 
-sent_cache = set()
-
+sent_cache = []
 MAX_CACHE = 1000
 
 
@@ -71,15 +71,27 @@ def fetch_getgems(offset):
 
         data = r.json()
 
-        result = []
+        edges = data.get("data", {}).get("nftSales", {}).get("edges", [])
 
-        edges = data["data"]["nftSales"]["edges"]
+        result = []
 
         for item in edges:
 
-            name = item["node"]["nft"]["name"]
+            node = item.get("node", {})
 
-            price = int(item["node"]["price"]) / 1000000000
+            nft = node.get("nft", {})
+
+            name = nft.get("name")
+
+            price_raw = node.get("price")
+
+            if not name or not price_raw:
+                continue
+
+            try:
+                price = int(price_raw) / 1e9
+            except:
+                continue
 
             result.append({
                 "name": name,
@@ -116,8 +128,7 @@ async def get_getgems():
     result = []
 
     for b in batches:
-
-        result += b
+        result.extend(b)
 
     return result
 
@@ -133,7 +144,6 @@ async def get_portals():
         async for msg in client.iter_messages(PORTALS_CHANNEL, limit=150):
 
             if msg.text:
-
                 messages.append(msg.text)
 
     except Exception as e:
@@ -152,11 +162,8 @@ def parse_price(text):
     if price:
 
         try:
-
             return float(price[0])
-
         except:
-
             return None
 
     return None
@@ -171,11 +178,9 @@ def is_rare(name, price):
     for k in RARE_KEYWORDS:
 
         if k in name:
-
             return True
 
     if price >= RARE_PRICE_THRESHOLD:
-
         return True
 
     return False
@@ -190,40 +195,39 @@ def compare_markets(getgems, portals):
     for g in getgems:
 
         g_name = g["name"]
-
         g_price = g["price"]
+
+        g_name_low = g_name.lower()
 
         for p in portals:
 
-            if g_name.lower() in p.lower():
+            p_low = p.lower()
 
-                portal_price = parse_price(p)
+            if g_name_low not in p_low:
+                continue
 
-                if not portal_price:
+            portal_price = parse_price(p)
 
-                    continue
+            if not portal_price:
+                continue
 
-                profit = portal_price - g_price
+            profit = portal_price - g_price
 
-                rare = is_rare(g_name, g_price)
+            rare = is_rare(g_name, g_price)
 
-                threshold = 2 if rare else 3
+            threshold = 2 if rare else 3
 
-                if profit >= threshold:
+            if profit >= threshold:
 
-                    deals.append({
+                deals.append({
 
-                        "name": g_name,
+                    "name": g_name,
+                    "buy": round(g_price, 2),
+                    "sell": round(portal_price, 2),
+                    "profit": round(profit, 2),
+                    "rare": rare
 
-                        "buy": round(g_price,2),
-
-                        "sell": round(portal_price,2),
-
-                        "profit": round(profit,2),
-
-                        "rare": rare
-
-                    })
+                })
 
     return deals
 
@@ -235,14 +239,12 @@ async def send_deal(deal):
     key = f"{deal['name']}_{deal['buy']}_{deal['sell']}"
 
     if key in sent_cache:
-
         return
 
-    sent_cache.add(key)
+    sent_cache.append(key)
 
     if len(sent_cache) > MAX_CACHE:
-
-        sent_cache.pop()
+        sent_cache.pop(0)
 
     tag = "💎 RARE" if deal["rare"] else "⚡ DEAL"
 
@@ -260,11 +262,8 @@ Profit: {deal['profit']} TON
     try:
 
         await bot.send_message(
-
             chat_id=USER_ID,
-
             text=text
-
         )
 
     except Exception as e:
@@ -289,29 +288,21 @@ async def main():
             print("Scanning markets...")
 
             getgems_task = asyncio.create_task(get_getgems())
-
             portals_task = asyncio.create_task(get_portals())
 
             getgems, portals = await asyncio.gather(
-
                 getgems_task,
-
                 portals_task
-
             )
 
             deals = compare_markets(
-
                 getgems,
-
                 portals
-
             )
 
             print("Deals found:", len(deals))
 
             for deal in deals[:10]:
-
                 await send_deal(deal)
 
         except Exception as e:
@@ -327,4 +318,5 @@ async def main():
 
 # --- ЗАПУСК ---
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
