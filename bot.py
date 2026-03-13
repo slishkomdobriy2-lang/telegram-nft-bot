@@ -1,8 +1,8 @@
-
 import asyncio
 import requests
 import re
 import time
+from collections import deque
 
 from telegram import Bot
 from telethon import TelegramClient
@@ -30,19 +30,24 @@ RARE_KEYWORDS = [
 ]
 
 RARE_PRICE_THRESHOLD = 30
+MIN_ROI = 0.15
+
+# --- ИНИЦИАЛИЗАЦИЯ ---
 
 bot = Bot(token=TOKEN)
 client = TelegramClient("session", api_id, api_hash)
 
 session = requests.Session()
 
-# --- КЕШ СДЕЛОК ---
+# --- КЕШИ ---
 
-sent_cache = []
-MAX_CACHE = 1000
+sent_cache = deque(maxlen=1000)
 
+getgems_cache = []
+getgems_cache_time = 0
 
 # --- GETGEMS API ---
+
 
 def fetch_getgems(offset):
 
@@ -78,11 +83,9 @@ def fetch_getgems(offset):
         for item in edges:
 
             node = item.get("node", {})
-
             nft = node.get("nft", {})
 
             name = nft.get("name")
-
             price_raw = node.get("price")
 
             if not name or not price_raw:
@@ -109,6 +112,12 @@ def fetch_getgems(offset):
 
 async def get_getgems():
 
+    global getgems_cache
+    global getgems_cache_time
+
+    if time.time() - getgems_cache_time < 30:
+        return getgems_cache
+
     loop = asyncio.get_event_loop()
 
     tasks = []
@@ -130,10 +139,14 @@ async def get_getgems():
     for b in batches:
         result.extend(b)
 
+    getgems_cache = result
+    getgems_cache_time = time.time()
+
     return result
 
 
 # --- TELEGRAM MARKET ---
+
 
 async def get_portals():
 
@@ -153,23 +166,55 @@ async def get_portals():
     return messages
 
 
+# --- ИНДЕКС СООБЩЕНИЙ ---
+
+
+def build_portal_index(messages):
+
+    index = {}
+
+    for msg in messages:
+
+        words = re.findall(r"[a-zA-Z0-9]+", msg.lower())
+
+        for w in words:
+
+            index.setdefault(w, []).append(msg)
+
+    return index
+
+
+# --- СРАВНЕНИЕ НАЗВАНИЙ ---
+
+
+def name_match(a, b):
+
+    a_words = set(a.lower().split())
+    b_words = set(b.lower().split())
+
+    common = a_words & b_words
+
+    return len(common) >= 2
+
+
 # --- ПАРСИНГ ЦЕНЫ ---
+
 
 def parse_price(text):
 
     price = re.findall(r"\d+\.?\d*", text)
 
-    if price:
+    if not price:
+        return None
 
-        try:
-            return float(price[0])
-        except:
-            return None
-
-    return None
+    try:
+        return float(price[0])
+    except:
+        return None
 
 
-# --- ПРОВЕРКА РЕДКОСТИ NFT ---
+# --- ПРОВЕРКА РЕДКОСТИ ---
+
 
 def is_rare(name, price):
 
@@ -188,22 +233,35 @@ def is_rare(name, price):
 
 # --- ПОИСК АРБИТРАЖА ---
 
+
 def compare_markets(getgems, portals):
 
     deals = []
+
+    portal_index = build_portal_index(portals)
 
     for g in getgems:
 
         g_name = g["name"]
         g_price = g["price"]
 
-        g_name_low = g_name.lower()
+        words = g_name.lower().split()
 
-        for p in portals:
+        candidates = []
 
-            p_low = p.lower()
+        for w in words:
+            candidates.extend(portal_index.get(w, []))
 
-            if g_name_low not in p_low:
+        checked = set()
+
+        for p in candidates:
+
+            if p in checked:
+                continue
+
+            checked.add(p)
+
+            if not name_match(g_name, p):
                 continue
 
             portal_price = parse_price(p)
@@ -212,6 +270,14 @@ def compare_markets(getgems, portals):
                 continue
 
             profit = portal_price - g_price
+
+            if profit <= 0:
+                continue
+
+            roi = profit / g_price
+
+            if roi < MIN_ROI:
+                continue
 
             rare = is_rare(g_name, g_price)
 
@@ -225,14 +291,22 @@ def compare_markets(getgems, portals):
                     "buy": round(g_price, 2),
                     "sell": round(portal_price, 2),
                     "profit": round(profit, 2),
+                    "roi": round(roi * 100, 1),
                     "rare": rare
 
                 })
+
+    deals = sorted(
+        deals,
+        key=lambda x: x["profit"],
+        reverse=True
+    )
 
     return deals
 
 
 # --- ОТПРАВКА СИГНАЛА ---
+
 
 async def send_deal(deal):
 
@@ -242,9 +316,6 @@ async def send_deal(deal):
         return
 
     sent_cache.append(key)
-
-    if len(sent_cache) > MAX_CACHE:
-        sent_cache.pop(0)
 
     tag = "💎 RARE" if deal["rare"] else "⚡ DEAL"
 
@@ -257,6 +328,7 @@ Buy: {deal['buy']} TON
 Sell: {deal['sell']} TON
 
 Profit: {deal['profit']} TON
+ROI: {deal['roi']} %
 """
 
     try:
@@ -272,6 +344,7 @@ Profit: {deal['profit']} TON
 
 
 # --- ОСНОВНОЙ ЦИКЛ ---
+
 
 async def main():
 
@@ -317,6 +390,7 @@ async def main():
 
 
 # --- ЗАПУСК ---
+
 
 if __name__ == "__main__":
     asyncio.run(main())
