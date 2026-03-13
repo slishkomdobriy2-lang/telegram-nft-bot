@@ -1,101 +1,139 @@
+
 import asyncio
+import requests
+import re
+
 from telegram import Bot
+from telethon import TelegramClient
+
+# --- НАСТРОЙКИ ---
 
 TOKEN = "8613719930:AAEC4Ky7dgZL9yoQ1FJ6H3dRgsSjVqnQRA4"
 USER_ID = "5524166026"
 
+api_id = 38895122
+api_hash = "439555adbb1d50504cee21fd4ffc32d7"
+
 bot = Bot(token=TOKEN)
 
-async def main():
-    while True:
+client = TelegramClient("session", api_id, api_hash)
 
-    nfts=get_getgems_nfts()
 
-    deals=find_deals(nfts)
-
-    for deal in deals:
-
-        await send_deal(deal)
-
-    await asyncio.sleep(30)
-
-asyncio.run(main())
-
-import requests
+# --- ПОЛУЧЕНИЕ NFT С GETGEMS ---
 
 def get_getgems_nfts():
 
     url = "https://api.getgems.io/graphql"
 
     query = {
-    "query": """
-    {
-      nftSales(first:50){
-        edges{
-          node{
-            price
-            nft{
-              name
-              address
+        "query": """
+        {
+          nftSales(first:50){
+            edges{
+              node{
+                price
+                nft{
+                  name
+                }
+              }
             }
           }
         }
-      }
-    }
-    """
+        """
     }
 
-    r = requests.post(url, json=query)
-    data = r.json()
+    try:
 
-    result=[]
+        r = requests.post(url, json=query, timeout=10)
+        data = r.json()
 
-    for item in data["data"]["nftSales"]["edges"]:
+        result = []
 
-        name=item["node"]["nft"]["name"]
-        price=int(item["node"]["price"])/1000000000
+        for item in data["data"]["nftSales"]["edges"]:
 
-        result.append({
-            "name":name,
-            "price":price
-        })
+            name = item["node"]["nft"]["name"]
+            price = int(item["node"]["price"]) / 1000000000
 
-    return result
+            result.append({
+                "name": name,
+                "price": price
+            })
 
-def calculate_profit(buy_price, sell_price):
+        return result
 
-    fee = sell_price * 0.05
+    except Exception as e:
 
-    profit = sell_price - buy_price - fee
+        print("Getgems error:", e)
+        return []
 
-    return round(profit,2)
 
-def find_deals(nfts):
+# --- ЧТЕНИЕ TELEGRAM NFT MARKET ---
 
-    deals=[]
+async def get_portals_market():
 
-    for nft in nfts:
+    messages = []
 
-        if nft["price"] < 20:
+    try:
 
-            sell_price = nft["price"] * 1.4
+        async for message in client.iter_messages("portals_market", limit=50):
 
-            profit = calculate_profit(nft["price"], sell_price)
+            if message.text:
+                messages.append(message.text)
 
-            if profit >= 3:
+    except Exception as e:
 
-                deals.append({
-                    "name": nft["name"],
-                    "buy": nft["price"],
-                    "sell": sell_price,
-                    "profit": profit
-                })
+        print("Telegram parse error:", e)
+
+    return messages
+
+
+# --- ПАРСИНГ ЦЕНЫ (ПУНКТ 7) ---
+
+def parse_price(text):
+
+    price = re.findall(r"\d+\.?\d*", text)
+
+    if price:
+        return float(price[0])
+
+    return None
+
+
+# --- СРАВНЕНИЕ МАРКЕТОВ ---
+
+def compare_markets(getgems, portals):
+
+    deals = []
+
+    for g in getgems:
+
+        for p in portals:
+
+            if g["name"].lower() in p.lower():
+
+                portal_price = parse_price(p)
+
+                if portal_price:
+
+                    profit = portal_price - g["price"]
+
+                    if profit > 3:
+
+                        deals.append({
+                            "name": g["name"],
+                            "buy": g["price"],
+                            "sell": portal_price,
+                            "profit": round(profit, 2)
+                        })
 
     return deals
 
+
+# --- ОТПРАВКА СДЕЛКИ В TELEGRAM ---
+
 async def send_deal(deal):
 
-    text=f"""
+    text = f"""
 🚨 NFT ARBITRAGE
 
 NFT: {deal['name']}
@@ -106,4 +144,47 @@ Sell: {deal['sell']} TON
 Profit: {deal['profit']} TON
 """
 
-    await bot.send_message(chat_id=USER_ID,text=text)
+    try:
+
+        await bot.send_message(
+            chat_id=USER_ID,
+            text=text
+        )
+
+    except Exception as e:
+
+        print("Send message error:", e)
+
+
+# --- ОСНОВНОЙ ЦИКЛ БОТА ---
+
+async def main():
+
+    await client.start()
+
+    while True:
+
+        try:
+
+            print("Scanning markets...")
+
+            getgems = get_getgems_nfts()
+
+            portals = await get_portals_market()
+
+            deals = compare_markets(getgems, portals)
+
+            for deal in deals:
+
+                await send_deal(deal)
+
+        except Exception as e:
+
+            print("Main loop error:", e)
+
+        await asyncio.sleep(30)
+
+
+# --- ЗАПУСК ---
+
+asyncio.run(main())
