@@ -8,7 +8,7 @@ from telethon import TelegramClient
 
 # --- НАСТРОЙКИ ---
 
-TOKEN = "8613719930:AAEC4Ky7dgZL9yoQ1FJ6H3dRgsSjVqnQRA4"
+TOKEN = "8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw"
 USER_ID = "5524166026"
 
 api_id = 38895122
