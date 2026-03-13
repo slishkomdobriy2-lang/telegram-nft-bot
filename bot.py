@@ -2,20 +2,21 @@ import asyncio
 import requests
 import re
 import time
+import os
 from collections import deque
 
 from telegram import Bot
 from telethon import TelegramClient
 
-# --- НАСТРОЙКИ ---
+# --- ENV НАСТРОЙКИ (Railway) ---
 
-TOKEN = "8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw"
-USER_ID = 5524166026
+TOKEN = os.getenv("8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw")
+USER_ID = int(os.getenv("5524166026", "0"))
 
-api_id = 38895122
-api_hash = "439555adbb1d50504cee21fd4ffc32d7"
+api_id = int(os.getenv("38895122"))
+api_hash = os.getenv("439555adbb1d50504cee21fd4ffc32d7")
 
-PORTALS_CHANNEL = "portals_market"
+PORTALS_CHANNEL = os.getenv("getgems", "portals_community")
 
 SCAN_INTERVAL = 15
 
@@ -39,12 +40,13 @@ client = TelegramClient("session", api_id, api_hash)
 
 session = requests.Session()
 
-# --- КЕШИ ---
+# --- КЕШ ---
 
 sent_cache = deque(maxlen=1000)
 
 getgems_cache = []
 getgems_cache_time = 0
+
 
 # --- GETGEMS API ---
 
@@ -73,6 +75,10 @@ def fetch_getgems(offset):
     try:
 
         r = session.post(url, json=query, timeout=10)
+
+        if r.status_code != 200:
+            return []
+
         data = r.json()
 
         edges = data.get("data", {}).get("nftSales", {}).get("edges", [])
@@ -118,17 +124,10 @@ async def get_getgems():
 
     loop = asyncio.get_running_loop()
 
-    tasks = []
-
-    for i in range(5):
-
-        tasks.append(
-            loop.run_in_executor(
-                None,
-                fetch_getgems,
-                i * 100
-            )
-        )
+    tasks = [
+        loop.run_in_executor(None, fetch_getgems, i * 100)
+        for i in range(5)
+    ]
 
     batches = await asyncio.gather(*tasks)
 
@@ -210,16 +209,15 @@ def parse_price(text):
         return None
 
 
-# --- ПРОВЕРКА РЕДКОСТИ ---
+# --- РЕДКОСТЬ ---
 
 
 def is_rare(name, price):
 
     name = name.lower()
 
-    for k in RARE_KEYWORDS:
-        if k in name:
-            return True
+    if any(k in name for k in RARE_KEYWORDS):
+        return True
 
     if price >= RARE_PRICE_THRESHOLD:
         return True
@@ -295,16 +293,12 @@ def compare_markets(getgems, portals):
 
                 })
 
-    deals = sorted(
-        deals,
-        key=lambda x: x["profit"],
-        reverse=True
-    )
+    deals.sort(key=lambda x: x["profit"], reverse=True)
 
     return deals
 
 
-# --- ОТПРАВКА СИГНАЛА ---
+# --- ОТПРАВКА ---
 
 
 async def send_deal(deal):
@@ -318,17 +312,14 @@ async def send_deal(deal):
 
     tag = "💎 RARE" if deal["rare"] else "⚡ DEAL"
 
-    text = f"""
-{tag} NFT ARBITRAGE
-
-NFT: {deal['name']}
-
-Buy: {deal['buy']} TON
-Sell: {deal['sell']} TON
-
-Profit: {deal['profit']} TON
-ROI: {deal['roi']} %
-"""
+    text = (
+        f"{tag} NFT ARBITRAGE\n\n"
+        f"NFT: {deal['name']}\n\n"
+        f"Buy: {deal['buy']} TON\n"
+        f"Sell: {deal['sell']} TON\n\n"
+        f"Profit: {deal['profit']} TON\n"
+        f"ROI: {deal['roi']} %"
+    )
 
     try:
 
@@ -351,12 +342,10 @@ async def main():
 
     print("BOT STARTED")
 
-    # --- СООБЩЕНИЕ О СТАРТЕ БОТА ---
-
     try:
         await bot.send_message(
             chat_id=USER_ID,
-            text="✅ Бот успешно запущен и начал работу."
+            text="✅ Бот успешно запущен."
         )
     except Exception as e:
         print("Startup message error:", e)
@@ -367,8 +356,6 @@ async def main():
 
         try:
 
-            print("Scanning markets...")
-
             getgems_task = asyncio.create_task(get_getgems())
             portals_task = asyncio.create_task(get_portals())
 
@@ -377,12 +364,9 @@ async def main():
                 portals_task
             )
 
-            deals = compare_markets(
-                getgems,
-                portals
-            )
+            deals = compare_markets(getgems, portals)
 
-            print("Deals found:", len(deals))
+            print("Deals:", len(deals))
 
             for deal in deals[:10]:
                 await send_deal(deal)
@@ -392,7 +376,6 @@ async def main():
             print("Main error:", e)
 
         elapsed = time.time() - start
-
         sleep = max(5, SCAN_INTERVAL - int(elapsed))
 
         await asyncio.sleep(sleep)
@@ -402,4 +385,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Stopped")
