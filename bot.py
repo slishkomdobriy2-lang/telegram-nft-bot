@@ -1,24 +1,34 @@
 import asyncio
-import requests
+import os
 import re
 import time
-import os
+import requests
+
 from collections import deque
 
 from telegram import Bot
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 
-# --- ENV НАСТРОЙКИ (Railway) ---
 
-TOKEN = os.getenv("8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw")
-USER_ID = int(os.getenv("5524166026", "0"))
+# =========================
+# ENV (Railway variables)
+# =========================
 
-api_id = int(os.getenv("38895122"))
-api_hash = os.getenv("439555adbb1d50504cee21fd4ffc32d7")
+BOT_TOKEN = os.getenv("8789505484:AAFpqqn4AGC-DkDCC3Txjse6YSRSNij6Emw")
+USER_ID = int(os.getenv("5524166026"))
 
-PORTALS_CHANNEL = os.getenv("getgems", "portals_community")
+API_ID = int(os.getenv("38895122"))
+API_HASH = os.getenv("439555adbb1d50504cee21fd4ffc32d7")
 
-SCAN_INTERVAL = 15
+PORTALS_CHANNEL = os.getenv("Tonnel_Network_bot", "portals_community")
+
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "15"))
+
+
+# =========================
+# SETTINGS
+# =========================
 
 RARE_KEYWORDS = [
     "rare",
@@ -33,14 +43,21 @@ RARE_KEYWORDS = [
 RARE_PRICE_THRESHOLD = 30
 MIN_ROI = 0.15
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
 
-bot = Bot(token=TOKEN)
-client = TelegramClient("session", api_id, api_hash)
+# =========================
+# INIT
+# =========================
+
+bot = Bot(token=BOT_TOKEN)
+
+client = TelegramClient(
+    "session",
+    API_ID,
+    API_HASH,
+    system_version="4.16.30"
+)
 
 session = requests.Session()
-
-# --- КЕШ ---
 
 sent_cache = deque(maxlen=1000)
 
@@ -48,8 +65,9 @@ getgems_cache = []
 getgems_cache_time = 0
 
 
-# --- GETGEMS API ---
-
+# =========================
+# GETGEMS API
+# =========================
 
 def fetch_getgems(offset):
 
@@ -97,7 +115,7 @@ def fetch_getgems(offset):
                 continue
 
             try:
-                price = int(price_raw) / 1e9
+                price = float(price_raw) / 1e9
             except:
                 continue
 
@@ -126,7 +144,7 @@ async def get_getgems():
 
     tasks = [
         loop.run_in_executor(None, fetch_getgems, i * 100)
-        for i in range(5)
+        for i in range(6)
     ]
 
     batches = await asyncio.gather(*tasks)
@@ -142,8 +160,9 @@ async def get_getgems():
     return result
 
 
-# --- TELEGRAM MARKET ---
-
+# =========================
+# TELEGRAM MARKET
+# =========================
 
 async def get_portals():
 
@@ -151,10 +170,15 @@ async def get_portals():
 
     try:
 
-        async for msg in client.iter_messages(PORTALS_CHANNEL, limit=150):
+        async for msg in client.iter_messages(PORTALS_CHANNEL, limit=200):
 
             if msg.text:
                 messages.append(msg.text)
+
+    except FloodWaitError as e:
+
+        print("FloodWait:", e.seconds)
+        await asyncio.sleep(e.seconds)
 
     except Exception as e:
 
@@ -163,10 +187,11 @@ async def get_portals():
     return messages
 
 
-# --- ИНДЕКС СООБЩЕНИЙ ---
+# =========================
+# MESSAGE INDEX
+# =========================
 
-
-def build_portal_index(messages):
+def build_index(messages):
 
     index = {}
 
@@ -180,8 +205,9 @@ def build_portal_index(messages):
     return index
 
 
-# --- СРАВНЕНИЕ НАЗВАНИЙ ---
-
+# =========================
+# NAME MATCH
+# =========================
 
 def name_match(a, b):
 
@@ -193,12 +219,13 @@ def name_match(a, b):
     return len(common) >= 2
 
 
-# --- ПАРСИНГ ЦЕНЫ ---
-
+# =========================
+# PRICE PARSER
+# =========================
 
 def parse_price(text):
 
-    price = re.findall(r"\d+\.?\d*", text)
+    price = re.findall(r"\d+(?:\.\d+)?", text)
 
     if not price:
         return None
@@ -209,8 +236,9 @@ def parse_price(text):
         return None
 
 
-# --- РЕДКОСТЬ ---
-
+# =========================
+# RARE CHECK
+# =========================
 
 def is_rare(name, price):
 
@@ -225,8 +253,9 @@ def is_rare(name, price):
     return False
 
 
-# --- ПОИСК АРБИТРАЖА ---
-
+# =========================
+# MARKET COMPARISON
+# =========================
 
 def compare_markets(getgems, portals):
 
@@ -235,7 +264,7 @@ def compare_markets(getgems, portals):
     if not getgems or not portals:
         return deals
 
-    portal_index = build_portal_index(portals)
+    portal_index = build_index(portals)
 
     for g in getgems:
 
@@ -298,8 +327,9 @@ def compare_markets(getgems, portals):
     return deals
 
 
-# --- ОТПРАВКА ---
-
+# =========================
+# SEND DEAL
+# =========================
 
 async def send_deal(deal):
 
@@ -333,8 +363,9 @@ async def send_deal(deal):
         print("Send error:", e)
 
 
-# --- ОСНОВНОЙ ЦИКЛ ---
-
+# =========================
+# MAIN LOOP
+# =========================
 
 async def main():
 
@@ -342,13 +373,10 @@ async def main():
 
     print("BOT STARTED")
 
-    try:
-        await bot.send_message(
-            chat_id=USER_ID,
-            text="✅ Бот успешно запущен."
-        )
-    except Exception as e:
-        print("Startup message error:", e)
+    await bot.send_message(
+        chat_id=USER_ID,
+        text="✅ Arbitrage bot started"
+    )
 
     while True:
 
@@ -366,7 +394,7 @@ async def main():
 
             deals = compare_markets(getgems, portals)
 
-            print("Deals:", len(deals))
+            print("Deals found:", len(deals))
 
             for deal in deals[:10]:
                 await send_deal(deal)
@@ -376,17 +404,16 @@ async def main():
             print("Main error:", e)
 
         elapsed = time.time() - start
-        sleep = max(5, SCAN_INTERVAL - int(elapsed))
+
+        sleep = max(5, SCAN_INTERVAL - elapsed)
 
         await asyncio.sleep(sleep)
 
 
-# --- ЗАПУСК ---
-
+# =========================
+# RUN
+# =========================
 
 if __name__ == "__main__":
 
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Stopped")
+    asyncio.run(main())
