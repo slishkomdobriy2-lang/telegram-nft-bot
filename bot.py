@@ -73,7 +73,6 @@ def fetch_getgems(offset):
     try:
 
         r = session.post(url, json=query, timeout=10)
-
         data = r.json()
 
         edges = data.get("data", {}).get("nftSales", {}).get("edges", [])
@@ -106,7 +105,6 @@ def fetch_getgems(offset):
     except Exception as e:
 
         print("Getgems error:", e)
-
         return []
 
 
@@ -118,7 +116,7 @@ async def get_getgems():
     if time.time() - getgems_cache_time < 30:
         return getgems_cache
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     tasks = []
 
@@ -178,7 +176,6 @@ def build_portal_index(messages):
         words = re.findall(r"[a-zA-Z0-9]+", msg.lower())
 
         for w in words:
-
             index.setdefault(w, []).append(msg)
 
     return index
@@ -221,7 +218,6 @@ def is_rare(name, price):
     name = name.lower()
 
     for k in RARE_KEYWORDS:
-
         if k in name:
             return True
 
@@ -237,6 +233,9 @@ def is_rare(name, price):
 def compare_markets(getgems, portals):
 
     deals = []
+
+    if not getgems or not portals:
+        return deals
 
     portal_index = build_portal_index(portals)
 
@@ -352,6 +351,16 @@ async def main():
 
     print("BOT STARTED")
 
+    # --- СООБЩЕНИЕ О СТАРТЕ БОТА ---
+
+    try:
+        await bot.send_message(
+            chat_id=USER_ID,
+            text="✅ Бот успешно запущен и начал работу."
+        )
+    except Exception as e:
+        print("Startup message error:", e)
+
     while True:
 
         start = time.time()
@@ -393,4 +402,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 
